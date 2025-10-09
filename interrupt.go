@@ -24,8 +24,13 @@ package interrupt
 
 import (
 	"context"
+	"errors"
+	"os"
 	"os/signal"
 )
+
+// ErrInterrupted is returned by Handle when the interrupt signal is received.
+var ErrInterrupted = errors.Join(errors.New("interrupted"), context.Canceled)
 
 // Handle returns a copy of the parent [context.Context] that is marked done
 // when an interrupt signal arrives or when the parent Context's Done channel
@@ -35,13 +40,7 @@ import (
 // first interrupt signal arrives, which will restore the default interrupt
 // signal behavior of Go programs (to exit).
 //
-// In effect, this function is functionally equivalent to:
-//
-//	ctx, cancel := signal.NotifyContext(ctx, interrupt.Signals...)
-//	go func() {
-//	  <-ctx.Done()
-//	  cancel()
-//	}()
+// If the interrupt signal is received, the context's error will be ErrInterrupted.
 //
 // Most programs should wrap their contexts using this function to enable interrupt
 // signal handling. The first interrupt signal will result in the context's Done
@@ -52,10 +51,18 @@ import (
 //	  ...
 //	}
 func Handle(ctx context.Context) context.Context {
-	ctx, cancel := signal.NotifyContext(ctx, Signals...)
+	ctx, cancel := context.WithCancelCause(ctx)
+	signalChan := make(chan os.Signal, 1)
+	signal.Notify(signalChan, Signals...)
+
 	go func() {
-		<-ctx.Done()
-		cancel()
+		defer signal.Stop(signalChan)
+		select {
+		case <-ctx.Done():
+		case <-signalChan:
+			cancel(ErrInterrupted)
+		}
 	}()
+
 	return ctx
 }
